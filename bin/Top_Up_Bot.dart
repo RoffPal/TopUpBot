@@ -7,12 +7,14 @@ import 'package:teledart/telegram.dart';
 
 import 'util/database_Helper.dart';
 import 'util/sensitive_info.dart' as private;
+import 'util/process_top_up.dart' as pay;
 
 final BOT_TOKEN = private.TELEGRAM_BOT_TOKEN;
 final bot = Telegram(BOT_TOKEN);
 final keeper = StoreRef.main();
+final cancel = "❌ Cancel";
 ReplyKeyboardMarkup showMainKeyboard = ReplyKeyboardMarkup(keyboard: [
-  [KeyboardButton(text: "📲 Top-Up A Number")]
+  [KeyboardButton(text: private.topUpButton)]
 ], resize_keyboard: true);
 Database userDB;
 Database awaitingTopUpDB;
@@ -22,6 +24,10 @@ final RELOADLY_AUDIENCE = 'https://topups-sandbox.reloadly.com';
 
 void main(List<String> arguments) {
   initializeBot();
+
+  tele.onPhoneNumber().listen((event) async {
+    onNumberReceived(event);
+  });
 
   tele.onCommand().listen((event) {
     onCommandReceived(event);
@@ -66,11 +72,18 @@ Future deleteFromDB(Database db, dynamic key) => keeper.record(key).delete(db);
 Future updateDB(Database db, dynamic key, dynamic newValue) =>
     keeper.record(key).update(db, newValue);
 
+Future onNumberReceived(TeleDartMessage event) async {
+  dynamic details = await getDetailFromDB(awaitingTopUpDB, event.from.id);
+  if (details != null) {
+    updateDB(awaitingTopUpDB, event.from.id, {'number': event.text});
+    event.reply(private.ask4amount, parse_mode: 'markdown');
+  }
+}
+
 Future onMessageReceived(TeleDartMessage event) async {
-  //await event.reply("hshs");
   dynamic user = await getDetailFromDB(userDB, event.from.id);
 
-  // only goes through this (if statement) if user has nt been registered
+  // only goes through this (if statement 1st condition) if user has nt been registered
   if (user == null) {
     // Since the User has to enter both auth token and pin (for verifying transactions) before registration caused all this
     //  wahala below
@@ -82,7 +95,7 @@ Future onMessageReceived(TeleDartMessage event) async {
 
     print("This is auth: $auth");
     if (auth == null)
-      event.reply(private.invalidToken);
+      event.reply(private.invalidToken(event.text), parse_mode: 'markdown');
     else if (auth is Map) {
       if (event.text == "✅ Confirm") {
         registerUser(event, auth["pin"]);
@@ -115,10 +128,37 @@ Future onMessageReceived(TeleDartMessage event) async {
       keeper.record(event.from.id).add(authenticator, 'pin');
       event.reply(private.ask4pin, parse_mode: 'markdown');
     }
+  } else {
+    dynamic topUp = await getDetailFromDB(awaitingTopUpDB, event.from.id);
+    if (topUp != null) {
+      dealWithAwaitingTopUp(event, topUp);
+    } else if (event.text == private.topUpButton) {
+      keeper.record(event.from.id).add(awaitingTopUpDB, "awaiting");
+      event.reply(private.ask4NumberToTopUp,
+          reply_markup: ReplyKeyboardMarkup(keyboard: [
+            [KeyboardButton(text: cancel)]
+          ], resize_keyboard: true));
+    }
   }
 }
 
 Future onCommandReceived(TeleDartMessage event) async {
+  print('got ${event.text}');
+  if (event.text.contains(private.setNewAuth) &&
+      event.text.split(' ').length > 1) {
+    bot.deleteMessage(event.from.id, event.message_id);
+    keeper
+        .record(event.text.split(' ')[1])
+        .add(authenticator, event.text.split(' ')[1])
+        .then((value) {
+      if (value)
+        event.reply("Successfully added");
+      else
+        event.reply("Failed to add");
+    });
+    return;
+  }
+
   dynamic topUp = await getDetailFromDB(awaitingTopUpDB, event.from.id);
 
   if (topUp != null) {
@@ -133,6 +173,27 @@ Future onCommandReceived(TeleDartMessage event) async {
 }
 
 Future registerUser(TeleDartMessage event, String pin) =>
-    keeper.record(event.from.id).add(userDB, MyUser(pin).toMap());
+    keeper.record(event.from.id).add(
+        userDB,
+        MyUser(pin, "${event.from.first_name} ${event.from.last_name}")
+            .toMap());
+
+Future dealWithAwaitingTopUp(TeleDartMessage event, dynamic topUp) async {
+  if (topUp == 'awaiting')
+    event.reply('Please enter a valid mobile number!');
+  else if (topUp['amount'] == null) {
+    try {
+      double amount = double.parse(event.text);
+      final user = MyUser.fromMap(await getDetailFromDB(userDB, event.from.id));
+
+      if (amount + user.usedToday > user.max)
+        event.reply(private.overUsedCredit(user), parse_mode: 'markdown');
+      else
+        pay.Airtime.determineOperator(event, topUp);
+    } catch (FormatException) {
+      event.reply('Please input a valid amount!');
+    }
+  }
+}
 
 // {} []

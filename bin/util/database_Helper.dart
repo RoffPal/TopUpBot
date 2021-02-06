@@ -18,9 +18,9 @@ class AwaitingTopUp {
 
 class MyUser {
   // named MyUser to avoid naming conflict5 with Telegram User Object
-  String pin;
+  String pin, name;
   int max = 500, usedToday = 0;
-  MyUser(this.pin);
+  MyUser(this.pin, this.name);
 
   MyUser.fromMap(dynamic data) {
     pin = data['pin'];
