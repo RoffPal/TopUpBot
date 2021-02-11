@@ -85,59 +85,16 @@ Future onMessageReceived(TeleDartMessage event) async {
 
   // only goes through this (if statement 1st condition) if user has nt been registered
   if (user == null) {
-    // Since the User has to enter both auth token and pin (for verifying transactions) before registration caused all this
-    //  wahala below
-    dynamic auth = await getDetailFromDB(authenticator, event.text) ??
-        await getDetailFromDB(
-            authenticator,
-            event.from
-                .id); // searches for User's token with the text entered by user
-
-    print("This is auth: $auth");
-    if (auth == null)
-      event.reply(private.invalidToken(event.text), parse_mode: 'markdown');
-    else if (auth is Map) {
-      if (event.text == "✅ Confirm") {
-        registerUser(event, auth["pin"]);
-        bot.deleteMessage(event.from.id, auth["id"]);
-        event.reply(private.successfulRegistration,
-            reply_markup: showMainKeyboard);
-      } else if (event.text == "🗝 Change Pin") {
-        updateDB(authenticator, event.from.id, 'pin');
-        event.reply(private.ask4pin,
-            parse_mode: 'markdown',
-            reply_markup: ReplyKeyboardRemove(remove_keyboard: true));
-        bot.deleteMessage(event.from.id, auth["id"]);
-      }
-    } else if (auth == 'pin') {
-      // adds new authenticator to allow user confirm pin
-      updateDB(
-          authenticator, event.from.id, {'pin': 'pin', 'id': event.message_id});
-      event.reply(private.confirmPin,
-          parse_mode: 'markdown',
-          reply_markup: ReplyKeyboardMarkup(keyboard: [
-            [
-              KeyboardButton(text: '✅ Confirm'),
-              KeyboardButton(text: '🗝 Change Pin')
-            ]
-          ], resize_keyboard: true));
-    } else {
-      deleteFromDB(authenticator, event.text);
-
-      // adds new authenticator to allow user input pin on next message
-      keeper.record(event.from.id).add(authenticator, 'pin');
-      event.reply(private.ask4pin, parse_mode: 'markdown');
-    }
+    dealWithAuth(event);
   } else {
     dynamic topUp = await getDetailFromDB(awaitingTopUpDB, event.from.id);
     if (topUp != null) {
-      dealWithAwaitingTopUp(event, topUp);
+      if (event.text.contains(cancel))
+        TopUp.deActivate(event);
+      else
+        TopUp.dealWithAwaitingTopUp(event, topUp);
     } else if (event.text == private.topUpButton) {
-      keeper.record(event.from.id).add(awaitingTopUpDB, "awaiting");
-      event.reply(private.ask4NumberToTopUp,
-          reply_markup: ReplyKeyboardMarkup(keyboard: [
-            [KeyboardButton(text: cancel)]
-          ], resize_keyboard: true));
+      TopUp.activate(event);
     }
   }
 }
@@ -151,10 +108,10 @@ Future onCommandReceived(TeleDartMessage event) async {
         .record(event.text.split(' ')[1])
         .add(authenticator, event.text.split(' ')[1])
         .then((value) {
-      if (value)
-        event.reply("Successfully added");
+      if (value != null)
+        event.reply('Successfully added');
       else
-        event.reply("Failed to add");
+        event.reply('Already exixts');
     });
     return;
   }
@@ -178,22 +135,88 @@ Future registerUser(TeleDartMessage event, String pin) =>
         MyUser(pin, "${event.from.first_name} ${event.from.last_name}")
             .toMap());
 
-Future dealWithAwaitingTopUp(TeleDartMessage event, dynamic topUp) async {
-  if (topUp == 'awaiting')
-    event.reply('Please enter a valid mobile number!');
-  else if (topUp['amount'] == null) {
-    try {
-      double amount = double.parse(event.text);
-      final user = MyUser.fromMap(await getDetailFromDB(userDB, event.from.id));
+Future dealWithAuth(TeleDartMessage event) async {
+  // Since the User has to enter both auth token and pin (for verifying transactions) before registration caused all this
+  //  wahala below
+  dynamic auth = await getDetailFromDB(authenticator, event.text) ??
+      await getDetailFromDB(
+          authenticator,
+          event.from
+              .id); // searches for User's token with the text entered by user
 
-      if (amount + user.usedToday > user.max)
-        event.reply(private.overUsedCredit(user), parse_mode: 'markdown');
-      else
-        pay.Airtime.determineOperator(event, topUp);
-    } catch (FormatException) {
-      event.reply('Please input a valid amount!');
+  print("This is auth: $auth");
+  if (auth == null)
+    event.reply(private.invalidToken(event.text), parse_mode: 'markdown');
+  else if (auth is Map) {
+    if (event.text == "✅ Confirm") {
+      registerUser(event, auth["pin"]);
+      bot.deleteMessage(event.from.id, auth["id"]);
+      deleteFromDB(authenticator, event.from.id);
+      event.reply(private.successfulRegistration,
+          parse_mode: 'markdown', reply_markup: showMainKeyboard);
+    } else if (event.text == "🗝 Change Pin") {
+      updateDB(authenticator, event.from.id, 'pin');
+      event.reply(private.ask4pin,
+          parse_mode: 'markdown',
+          reply_markup: ReplyKeyboardRemove(remove_keyboard: true));
+      bot.deleteMessage(event.from.id, auth["id"]);
     }
+  } else if (auth == 'pin') {
+    // adds new authenticator to allow user confirm pin
+    updateDB(
+        authenticator, event.from.id, {'pin': 'pin', 'id': event.message_id});
+    event.reply(private.confirmPin,
+        parse_mode: 'markdown',
+        reply_markup: ReplyKeyboardMarkup(keyboard: [
+          [
+            KeyboardButton(text: '✅ Confirm'),
+            KeyboardButton(text: '🗝 Change Pin')
+          ]
+        ], resize_keyboard: true));
+  } else {
+    deleteFromDB(authenticator, event.text);
+
+    // adds new authenticator to allow user input pin on next message
+    keeper.record(event.from.id).add(authenticator, 'pin');
+    event.reply(private.ask4pin, parse_mode: 'markdown');
   }
 }
 
+class TopUp {
+  static Future activate(TeleDartMessage event) => Future(() {
+        keeper.record(event.from.id).add(awaitingTopUpDB, "awaiting");
+        event.reply(private.ask4NumberToTopUp,
+            reply_markup: ReplyKeyboardMarkup(keyboard: [
+              [KeyboardButton(text: cancel)]
+            ], resize_keyboard: true));
+      });
+
+  static Future deActivate(TeleDartMessage event) {
+    keeper.record(event.from.id).delete(awaitingTopUpDB);
+    event.reply('TopUp is cancelled', reply_markup: showMainKeyboard);
+  }
+
+  static Future dealWithAwaitingTopUp(
+      TeleDartMessage event, dynamic topUp) async {
+    if (topUp == 'awaiting')
+      event.reply('Please enter a valid mobile number!');
+    else if (topUp['amount'] == null) {
+      try {
+        double amount = double.parse(event.text);
+        final user =
+            MyUser.fromMap(await getDetailFromDB(userDB, event.from.id));
+
+        if (amount + user.usedToday > user.max)
+          event.reply(private.overUsedCredit(user), parse_mode: 'markdown');
+        else
+          pay.Airtime.determineOperator(event, topUp);
+      } catch (FormatException) {
+        event.reply('Please input a valid amount!');
+      }
+    } else if (topUp['amount'] != null && event.text.contains('Confirm'))
+      pay.Airtime.topUpNumber(event, topUp);
+  }
+}
+
+// Work on changing price before confirming payments
 // {} []

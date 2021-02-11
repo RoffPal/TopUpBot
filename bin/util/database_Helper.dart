@@ -23,23 +23,14 @@ class MyUser {
   MyUser(this.pin, this.name);
 
   MyUser.fromMap(dynamic data) {
+    name = data['name'];
     pin = data['pin'];
     usedToday = data['usedToday'];
     max = data['max'];
   }
 
   Map<String, dynamic> toMap() =>
-      {'pin': pin, 'max': max, 'usedToday': usedToday};
+      {'name': name, 'pin': pin, 'max': max, 'usedToday': usedToday};
 }
 
 final keeper = StoreRef.main();
-main(List<String> args) async {
-  Database authenticator;
-  await databaseFactoryIo
-      .openDatabase(join('bin/util/Database', 'Authenticate.db'))
-      .then((value) {
-    authenticator = value;
-  });
-
-  keeper.record("key").add(authenticator, "key");
-}
